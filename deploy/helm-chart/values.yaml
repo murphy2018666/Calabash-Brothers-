@@ -1,0 +1,312 @@
+apiVersion: v2
+name: aegisci-control-plane
+description: Aegisci AI Agent CI/CD 控制面 — K8s Helm Chart
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - cicd
+  - ai-agent
+  - nestjs
+maintainers:
+  - name: AegisCI Team
+    url: https://github.com/murphy-workbench/aegisci
+sources:
+  - https://github.com/murphy-workbench/aegisci
+icon: https://www.aegisci.dev/icon.png
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 依赖（条件化，由 values 中的 subchart 开关控制）
+# ─────────────────────────────────────────────────────────────────────────────
+dependencies:
+  - name: postgresql
+    version: 15.x.x
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+    tags:
+      - aegisci-database
+  - name: nats
+    version: 1.x.x
+    repository: https://nats-io.github.io/k8s/helm/charts/
+    condition: nats.enabled
+    tags:
+      - aegisci-messaging
+  - name: redis
+    version: 17.x.x
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+    tags:
+      - aegisci-cache
+  - name: minio
+    version: 12.x.x
+    repository: https://charts.min.io/chart
+    condition: minio.enabled
+    tags:
+      - aegisci-storage
+  - name: vault
+    version: 0.x.x
+    repository: https://helm.releases.hashicorp.com
+    condition: vault.enabled
+    tags:
+      - aegisci-secrets
+  - name: otel-collector
+    version: 0.x.x
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    condition: otelCollector.enabled
+    tags:
+      - aegisci-observability
+  - name: nginx-ingress
+    version: 1.x.x
+    repository: https://kubernetes.github.io/ingress-nginx
+    condition: ingress.enabled
+    tags:
+      - aegisci-ingress
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 默认 values（standard 档）
+# ─────────────────────────────────────────────────────────────────────────────
+replicaCount: 3
+
+image:
+  repository: aegisci/control-plane
+  tag: "latest"          # 生产请使用具体版本，如 v0.1.0
+  pullPolicy: IfNotPresent
+
+deployment:
+  mode: standard         # minimal | standard | hardened
+
+# ── 控制面应用环境变量 ────────────────────────────────────────────────────────
+env:
+  AEGISCI_ENV: production
+  AEGISCI_PORT: "3000"
+  AEGISCI_MOCK_MODE: "off"
+  # 默认模型（standard/hardened 档需要配置真实模型网关 URL）
+  AEGISCI_DEFAULT_MODEL: "gpt-4o"
+  # OTel 追踪（standard/hardened）
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+  # OCI 同步策略（可选，挂载 ConfigMap）
+  AEGISCI_SYNC_POLICY_PATH: "/etc/aegisci/sync-policy.yaml"
+  # 执行后端（标准档）
+  AEGISCI_DAGGER_RUNTIME: "podman"
+  AEGISCI_DAGGER_TIMEOUT_MS: "300000"
+  AEGISCI_DAGGER_MEMORY_MB: "2048"
+  AEGISCI_RUNNER_HEARTBEAT_TIMEOUT_MS: "30000"
+  AEGISCI_RUNNER_MAX_SLOTS: "4"
+  AEGISCI_CI_BRIDGE_TIMEOUT_MS: "600000"
+
+# ── PostgreSQL（由 bitnami/postgresql subchart 提供）─────────────────────────
+postgresql:
+  enabled: true
+  auth:
+    database: aegisci
+    username: aegisci
+    password: changeme-postgres   # 生产请使用 secretRef 注入
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
+# ── NATS（由 subchart 提供；standard/hardened 必选，minimal 可选）───────────
+nats:
+  enabled: true
+  jetstream:
+    enabled: true
+    storage:
+      type: file
+      file:
+        maxSize: 1Gi
+        directory: /data/nats
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# ── Redis（standard/hardened 必选）──────────────────────────────────────────
+redis:
+  enabled: true
+  auth:
+    password: changeme-redis    # 生产请使用 secretRef
+  master:
+    persistence:
+      enabled: true
+      size: 4Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
+# ── MinIO（standard/hardened 必选，OCI Registry 持久存储）───────────────────
+minio:
+  enabled: true
+  auth:
+    rootUser: aegisci
+    rootPassword: changeme-minio    # 生产请使用 secretRef
+  buckets:
+    - name: skills
+      policy: none
+      purge: false
+    - name: artifacts
+      policy: none
+      purge: false
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# ── Vault（standard/hardened 必选，密钥管理）────────────────────────────────
+vault:
+  enabled: true
+  server:
+    dev:
+      enabled: false   # 禁用开发模式，使用正式部署
+    standalone:
+      enabled: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+  # 初始化 Secret（KV v2 引擎）
+  extraSecrets:
+    - secretPath: "secret/aegisci/db"
+      secretData:
+        POSTGRES_PASSWORD: "changeme-postgres"
+    - secretPath: "secret/aegisci/vault-token"
+      secretData:
+        VAULT_TOKEN: "changeme-vault"
+
+# ── OTel Collector（standard/hardened 必选，链路追踪）───────────────────────
+otelCollector:
+  enabled: true
+  mode: deployment
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  config:
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: "0.0.0.0:4318"
+          grpc:
+            endpoint: "0.0.0.0:4317"
+    processors:
+      batch: {}
+    exporters:
+      otlp/tempo:
+        endpoint: "tempo.observability.svc.cluster.local:4317"
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp/tempo]
+
+# ── Ingress（CGW 反向代理 / API Gateway）────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+  hosts:
+    - host: aegisci.local
+      paths:
+        - path: /api/v1(/|$)(.*)
+          pathType: ImplementationSpecific
+  tls:
+    - secretName: aegisci-tls
+      hosts:
+        - aegisci.local
+
+# ── 资源限制（control-plane 自身）─────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# ── 健康检查 ─────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: 3000
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ── Pod 配置 ─────────────────────────────────────────────────────────────────
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3000"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false   # WORM Trace 需要写盘（hardened 档）
+  capabilities:
+    drop:
+      - ALL
+
+# ── 水平扩缩容（HPA）────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ── 标准档 vs 加固档差异开关（hardened 时激活）─────────────────────────────
+hardened:
+  enabled: false
+  # OPA Sidecar（策略引擎）
+  opa:
+    enabled: false
+  # gVisor 运行时
+  gvisor:
+    enabled: false
+  # HSM（硬件安全模块，需专用驱动）
+  hsm:
+    enabled: false
+    # secretRef: hsm-token
+  # WORM 审计日志路径（不可变存储）
+  wormAuditPath: "/var/log/aegisci/worm"
+  # SIEM 集成端点
+  siemEndpoint: ""

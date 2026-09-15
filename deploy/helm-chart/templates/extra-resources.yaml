@@ -1,0 +1,74 @@
+# ── NetworkPolicy：控制面入站（仅允许 Ingress Controller 流量）──────────────────
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aegisci.fullname" . }}-ingress-only
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+  policyTypes:
+    - Ingress
+  ingress:
+    # 仅允许来自 ingress-nginx 控制器的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}
+
+# ── PodDisruptionBudget：保证最小可用副本（standard/hardened 必需）────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aegisci.fullname" . }}-pdb
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ mul .Values.replicaCount 60 | int }}  # 至少保持 60% 可用
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+
+# ── HorizontalPodAutoscaler ───────────────────────────────────────────────────
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "aegisci.fullname" . }}
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "aegisci.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

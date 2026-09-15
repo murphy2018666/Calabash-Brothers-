@@ -1,0 +1,41 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "moduleResolution": "node",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "importHelpers": true,
+    "target": "es2022",
+    "module": "esnext",
+    "lib": ["es2022", "dom"],
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@aegisci/core/kernel": ["libs/core/kernel/src/index.ts"],
+      "@aegisci/core/spi": ["libs/core/spi/src/index.ts"],
+      "@aegisci/core/spi/agents": ["libs/core/spi/src/agents/index.ts"],
+      "@aegisci/core/spi/tools": ["libs/core/spi/src/tools/index.ts"],
+      "@aegisci/core/spi/models": ["libs/core/spi/src/models/index.ts"],
+      "@aegisci/core/spi/trace": ["libs/core/spi/src/trace/index.ts"],
+      "@aegisci/core/spi/secrets": ["libs/core/spi/src/secrets/index.ts"],
+      "@aegisci/core/spi/policy": ["libs/core/spi/src/policy/index.ts"],
+      "@aegisci/core/spi/skills": ["libs/core/spi/src/skills/index.ts"],
+      "@aegisci/domain/pipeline": ["libs/domain/pipeline/src/index.ts"],
+      "@aegisci/domain/orchestration": ["libs/domain/orchestration/src/index.ts"],
+      "@aegisci/domain/policy/decision": ["libs/domain/policy/decision/src/index.ts"],
+      "@aegisci/domain/policy/approval": ["libs/domain/policy/approval/src/index.ts"],
+      "@aegisci/domain/policy/credential": ["libs/domain/policy/credential/src/index.ts"],
+      "@aegisci/domain/audit": ["libs/domain/audit/src/index.ts"],
+      "@aegisci/domain/identity": ["libs/domain/identity/src/index.ts"],
+      "@aegisci/domain/skill": ["libs/domain/skill/src/index.ts"],
+      "@aegisci/domain/policy": ["libs/domain/policy/src/index.ts"],
+      "@aegisci/shared/types": ["libs/shared/types/src/index.ts"],
+      "@aegisci/shared/config": ["libs/shared/config/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "tmp"]
+}

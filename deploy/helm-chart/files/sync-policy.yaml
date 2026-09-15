@@ -1,0 +1,8 @@
+# OCI 同步策略默认值
+enabled: false
+allowedTags:
+  - "v*"
+excludedTenants: []
+scheduledSync: false
+syncIntervalHours: 24
+publicMarketUrl: ""

@@ -1,0 +1,297 @@
+{{- /*
+  aegisci-control-plane/templates/deployment.yaml
+  Aegisci 控制面 Deployment — 支持 minimal / standard / hardened 三档部署
+*/ -}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegisci.fullname" . }}
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/deployment-mode: {{ required "deployment.mode is required" .Values.deployment.mode }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "aegisci.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0    # 控制面零宕机滚动更新
+
+  template:
+    metadata:
+      labels:
+        {{- include "aegisci.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/deployment-mode: {{ required "deployment.mode is required" .Values.deployment.mode }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        # 强制 sidecar-injector（OPA / WORM audit）跳过自动注入，由我们显式管理
+        sidecar.istio.io/inject: "false"
+        # 记录部署时间戳
+        deploy.aegisci/timestamp: "{{ now | unixEpoch }}"
+    spec:
+      # 安全上下文：非 root 用户运行
+      securityContext:
+        runAsNonRoot: {{ .Values.podSecurityContext.runAsNonRoot }}
+        runAsUser: {{ .Values.podSecurityContext.runAsUser }}
+        fsGroup: {{ .Values.podSecurityContext.fsGroup }}
+      {{- if .Values.hardened.enabled }}
+      # hardened 档：gVisor 运行时（需集群启用 sandboxed-container runtime）
+      runtimeClassName: gvisor
+      {{- end }}
+      # 服务账户（standard/hardened 需要读取 Secret）
+      serviceAccountName: {{ include "aegisci.fullname" . }}-sa
+      automountServiceAccountToken: false
+
+      # ── Init Container：等待依赖就绪 ────────────────────────────────────
+      initContainers:
+        # 等待 PostgreSQL 就绪
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ .Release.Name }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local 5432; do echo waiting for postgres; sleep 2; done; echo postgres ready"]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+        # 等待 NATS 就绪（standard/hardened）
+        - name: wait-for-nats
+          {{- if .Values.nats.enabled }}
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ .Release.Name }}-nats.{{ .Release.Namespace }}.svc.cluster.local 4222; do echo waiting for nats; sleep 2; done; echo nats ready"]
+          {{- else }}
+          image: busybox:1.36
+          command: ["echo", "Skipping NATS check (minimal mode)"]
+          {{- end }}
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+
+      # ── 主容器 ───────────────────────────────────────────────────────────
+      containers:
+        - name: control-plane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            # ── 核心环境变量（必填）─────────────────────────────────────────
+            - name: AEGISCI_PORT
+              value: "{{ .Values.env.AEGISCI_PORT }}"
+            - name: AEGISCI_ENV
+              value: {{ .Values.env.AEGISCI_ENV | quote }}
+            - name: AEGISCI_DEPLOYMENT_MODE
+              value: {{ .Values.deployment.mode | quote }}
+            - name: AEGISCI_MOCK_MODE
+              value: {{ .Values.env.AEGISCI_MOCK_MODE | quote }}
+            - name: AEGISCI_DEFAULT_MODEL
+              value: {{ .Values.env.AEGISCI_DEFAULT_MODEL | quote }}
+            # ── 执行后端配置 ──────────────────────────────────────────────
+            - name: AEGISCI_DAGGER_RUNTIME
+              value: {{ .Values.env.AEGISCI_DAGGER_RUNTIME | quote }}
+            - name: AEGISCI_DAGGER_TIMEOUT_MS
+              value: {{ .Values.env.AEGISCI_DAGGER_TIMEOUT_MS | quote }}
+            - name: AEGISCI_DAGGER_MEMORY_MB
+              value: {{ .Values.env.AEGISCI_DAGGER_MEMORY_MB | quote }}
+            - name: AEGISCI_RUNNER_HEARTBEAT_TIMEOUT_MS
+              value: {{ .Values.env.AEGISCI_RUNNER_HEARTBEAT_TIMEOUT_MS | quote }}
+            - name: AEGISCI_RUNNER_MAX_SLOTS
+              value: {{ .Values.env.AEGISCI_RUNNER_MAX_SLOTS | quote }}
+            - name: AEGISCI_CI_BRIDGE_TIMEOUT_MS
+              value: {{ .Values.env.AEGISCI_CI_BRIDGE_TIMEOUT_MS | quote }}
+            # ── PostgreSQL（动态生成连接串）───────────────────────────────
+            - name: AEGISCI_PG_URL
+              value: "postgres://$(PG_USER):$(PG_PASS)@{{ .Release.Name }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local:5432/{{ .Values.postgresql.auth.database }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: pg-password
+            - name: PG_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: PG_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: pg-password
+            # ── Vault（standard/hardened）─────────────────────────────────
+            {{- if and .Values.vault.enabled (eq .Values.deployment.mode "standard") }}
+            - name: VAULT_ADDR
+              value: "http://{{ .Release.Name }}-vault.{{ .Release.Namespace }}.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: vault-token
+            {{- end }}
+            {{- if and .Values.vault.enabled (eq .Values.deployment.mode "hardened") }}
+            - name: VAULT_ADDR
+              value: "http://{{ .Release.Name }}-vault.{{ .Release.Namespace }}.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: vault-token
+            {{- end }}
+            # ── OTel（standard/hardened）──────────────────────────────────
+            {{- if .Values.otelCollector.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.OTEL_EXPORTER_OTLP_ENDPOINT | quote }}
+            {{- end }}
+            # ── OCI Registry（standard/hardened）──────────────────────────
+            {{- if .Values.minio.enabled }}
+            - name: AEGISCI_OCI_REGISTRY_URL
+              value: "http://{{ .Release.Name }}-minio.{{ .Release.Namespace }}.svc.cluster.local:9000"
+            - name: AEGISCI_OCI_REGISTRY_PROJECT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: oci-project
+            - name: AEGISCI_OCI_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: oci-token
+            {{- end }}
+            # ── 运行时注入所有自定义环境变量（可选）───────────────────────
+            - name: EXTRA_ENV
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegisci.fullname" . }}-secrets
+                  key: extra-env
+
+          envFrom:
+            - configMapRef:
+                name: {{ include "aegisci.fullname" . }}-config
+            {{- if .Values.vault.enabled }}
+            - secretRef:
+                name: {{ include "aegisci.fullname" . }}-secrets
+            {{- end }}
+
+          # ── 健康检查 ────────────────────────────────────────────────────
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          securityContext:
+            allowPrivilegeEscalation: {{ .Values.securityContext.allowPrivilegeEscalation }}
+            readOnlyRootFilesystem: {{ .Values.securityContext.readOnlyRootFilesystem }}
+            capabilities:
+              drop:
+                {{- toYaml .Values.securityContext.capabilities.drop | nindent 18 }}
+
+          # ── 持久卷挂载（hardened WORM + 标准日志）─────────────────────
+          volumeMounts:
+            {{- if .Values.hardened.enabled }}
+            - name: worm-audit
+              mountPath: {{ .Values.hardened.wormAuditPath }}
+              readOnly: false
+            {{- end }}
+            - name: sync-policy
+              mountPath: /etc/aegisci/sync-policy.yaml
+              subPath: sync-policy.yaml
+              readOnly: true
+
+      # ── Volume 定义 ─────────────────────────────────────────────────────────
+      volumes:
+        - name: sync-policy
+          configMap:
+            name: {{ include "aegisci.fullname" . }}-config
+            items:
+              - key: sync-policy.yaml
+                path: sync-policy.yaml
+        {{- if .Values.hardened.enabled }}
+        - name: worm-audit
+          persistentVolumeClaim:
+            claimName: {{ include "aegisci.fullname" . }}-worm-audit
+        {{- end }}
+
+---
+{{/* ── Service ─────────────────────────────────────────────────────────── */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aegisci.fullname" . }}
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "aegisci.selectorLabels" . | nindent 4 }}
+
+---
+{{/* ── ConfigMap：应用配置 ───────────────────────────────────────────────── */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aegisci.fullname" . }}-config
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+data:
+  sync-policy.yaml: |
+{{ .Files.Get "files/sync-policy.yaml" | default "# OCI sync policy（由 Helm values.syncPolicy 填充）\nenabled: false\n" | indent 4 }}
+
+---
+{{/* ── Secret：敏感数据（由 Helm values.secrets 或外部注入）────────────────── */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "aegisci.fullname" . }}-secrets
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # PostgreSQL（若 subchart 未启用，需从外部提供）
+  pg-password: {{ required "postgresql.auth.password is required when postgresql.enabled=false or as external override" .Values.postgresql.auth.password | quote }}
+  # Vault（standard/hardened）
+  {{- if .Values.vault.enabled }}
+  vault-token: {{ required "vault.auth.token is required when vault.enabled=true" .Values.vault.auth.token | quote }}
+  {{- end }}
+  # OCI Registry
+  {{- if .Values.minio.enabled }}
+  oci-project: {{ .Values.env.AEGISCI_OCI_REGISTRY_PROJECT | default "aegisci" | quote }}
+  oci-token: {{ required "minio.auth.rootPassword is required when minio.enabled=true" .Values.minio.auth.rootPassword | quote }}
+  {{- end }}
+  # 扩展环境变量（JSON 字符串，由控制器读取后注入）
+  extra-env: "{}"
+
+---
+{{/* ── ServiceAccount ────────────────────────────────────────────────────── */}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aegisci.fullname" . }}-sa
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+
+---
+{{/* ── Hardened 档：WORM 审计 PVC ────────────────────────────────────────── */}}
+{{- if .Values.hardened.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aegisci.fullname" . }}-worm-audit
+  labels:
+    {{- include "aegisci.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worm-audit
+spec:
+  accessModes:
+    - ReadOnlyMany   # WORM：只可追加，不可篡改或删除
+  storageClassName: {{ required "hardened.wormStorageClass is required" .Values.hardened.wormStorageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.hardened.wormStorageSize | default "10Gi" }}
+{{- end }}

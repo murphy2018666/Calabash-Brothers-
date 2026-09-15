@@ -1,0 +1,14 @@
+# Aegisci Control Plane — OCI 同步策略（可选）
+#
+# 由环境变量 AEGISCI_SYNC_POLICY_PATH 指向此文件。
+# 未配置或加载失败时，使用 DEFAULT_SYNC_POLICY（disabled，全量允许）。
+#
+# 参考：docs/design/architecture-design.md §8.1 / ADD §K8b
+
+enabled: false                      # 是否启用定时同步
+allowedTags:
+  - "v*"                            # 只同步以 v 开头的标签（glob）
+excludedTenants: []                 # 排除的租户 ID
+scheduledSync: false                # 是否启用定时任务
+syncIntervalHours: 24               # 同步间隔（小时，最小 1，最大 168）
+publicMarketUrl: ""                 # 公共市场 Registry 地址（enabled=true 时必填）

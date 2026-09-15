@@ -1,0 +1,175 @@
+# Aegisci Control Plane — docker-compose（minimal 档本地一键启动）
+#
+# 启动命令：
+#   docker compose -f deploy/docker-compose.yml up -d
+#   docker compose -f deploy/docker-compose.yml ps
+#   docker compose -f deploy/docker-compose.yml logs -f control-plane
+#
+# 停止并清理：
+#   docker compose -f deploy/docker-compose.yml down -v
+#
+# 对应的控制面环境变量：
+#   AEGISCI_PORT=3000
+#   AEGISCI_DEPLOYMENT_MODE=minimal
+#   AEGISCI_ENV=development
+#   AEGISCI_MOCK_MODE=on               # 可选：强制 mock 模式
+#   AEGISCI_SECRET_PATH=kv/aegisci/minimal  # Vault 路径（standard/hardened 才需要）
+#   AEGISCI_SYNC_POLICY_PATH=./sync-policy.yaml  # OCI 同步策略（optional）
+#
+# 数据持久化（minimal 档的 PG 数据保留在 named volume 中）：
+#   docker compose -f deploy/docker-compose.yml down -v   # 带 -v 会删除数据
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # 控制面应用
+  # ───────────────────────────────────────────────────────────────────────────
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: aegisci/control-plane:local
+    container_name: aegisci-control-plane
+    restart: unless-stopped
+    ports:
+      - "${AEGISCI_PORT:-3000}:3000"
+    environment:
+      AEGISCI_PORT: "3000"
+      AEGISCI_ENV: "${AEGISCI_ENV:-development}"
+      AEGISCI_DEPLOYMENT_MODE: "${AEGISCI_DEPLOYMENT_MODE:-minimal}"
+      AEGISCI_MOCK_MODE: "${AEGISCI_MOCK_MODE:-off}"
+      # PostgreSQL（minimal 档默认使用，PG_URL 为空时自动降级为内存实现）
+      AEGISCI_PG_URL: "postgres://aegisci:aegisci123@postgres:5432/aegisci"
+      # OTel（minimal 档无需，保留占位；standard/hardened 档需覆盖）
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      # 模型网关（minimal 档使用 StubModelGateway，默认无需配置）
+      AEGISCI_DEFAULT_MODEL: "${AEGISCI_DEFAULT_MODEL:-stub}"
+      # Sync Policy（可选，OCI 技能注册表使用）
+      AEGISCI_SYNC_POLICY_PATH: "${AEGISCI_SYNC_POLICY_PATH:-/etc/aegisci/sync-policy.yaml}"
+    volumes:
+      - ./configs/sync-policy.yaml:/etc/aegisci/sync-policy.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - aegisci-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PostgreSQL 16（数据持久化，标准/加固档均需）
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: aegisci-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: aegisci
+      POSTGRES_PASSWORD: aegisci123
+      POSTGRES_DB: aegisci
+    volumes:
+      - aegisci-pg-data:/var/lib/postgresql/data
+      # 首次启动建库脚本（可选，由应用自身 ensureSchema 保证，此处仅做兜底）
+      - ./configs/init-db.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    networks:
+      - aegisci-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegisci -d aegisci"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # NATS 2.10 + JetStream（消息总线，standard/hardened 档需要，minimal 可选）
+  # ───────────────────────────────────────────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    container_name: aegisci-nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # NATS 管理端点（http://localhost:8222）
+    command: >
+      --jetstream
+      --store_dir /data
+      --http_port 8222
+    volumes:
+      - aegisci-nats-data:/data
+    networks:
+      - aegisci-net
+    healthcheck:
+      test: ["CMD", "nats", "server", "config", "check"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis 7（缓存，standard/hardened 档需要）
+  # ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: aegisci-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass aegisci_redis123
+    volumes:
+      - aegisci-redis-data:/data
+    networks:
+      - aegisci-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "aegisci_redis123", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # MinIO（对象存储，OCI 技能注册表 push/pull 使用，standard/hardened 档需要）
+  # ───────────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: aegisci-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # MinIO Console
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: aegisci
+      MINIO_ROOT_PASSWORD: aegisci_minio123
+    volumes:
+      - aegisci-minio-data:/data
+    networks:
+      - aegisci-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Network
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  aegisci-net:
+    driver: bridge
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Volumes（数据持久化，down -v 时清除）
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  aegisci-pg-data:
+    driver: local
+  aegisci-nats-data:
+    driver: local
+  aegisci-redis-data:
+    driver: local
+  aegisci-minio-data:
+    driver: local

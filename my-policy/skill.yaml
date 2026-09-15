@@ -1,0 +1,12 @@
+# AegisCI Skill Manifest (DES-11.2)
+name: my-policy
+version: 1.0.0
+type: agent
+description: agent 技能
+riskTier: G2
+author: 
+tags:
+  - agent
+prompts: []
+dependencies: []
+protocols: []
