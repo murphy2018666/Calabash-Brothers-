@@ -1,0 +1,30 @@
+{
+  "name": "domain-policy",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/domain/policy",
+  "projectType": "library",
+  "tags": ["scope:policy-decision", "scope:policy-approval", "scope:policy-credential", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nrwl/js:tsc",
+      "options": {
+        "outputPath": "dist/libs/domain/policy",
+        "main": "libs/domain/policy/decision/src/index.ts",
+        "tsConfig": "libs/domain/policy/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "@nrwl/jest:jest",
+      "options": {
+        "jestConfig": "libs/domain/policy/jest.config.ts",
+        "passWithNoTests": true
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "options": {
+        "lintFilePatterns": ["libs/domain/policy/**/*.ts"]
+      }
+    }
+  }
+}

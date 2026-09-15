@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "decision/src/**/*.ts",
+    "approval/src/**/*.ts",
+    "credential/src/**/*.ts",
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "jest.config.ts",
+    "**/src/**/*.spec.ts",
+    "**/src/**/*.test.ts"
+  ]
+}

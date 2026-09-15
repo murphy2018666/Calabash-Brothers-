@@ -1,0 +1,40 @@
+{
+  "name": "domain-pipeline",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/domain/pipeline/src",
+  "prefix": "aegisci",
+  "tags": ["scope:pipeline", "type:domain", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nrwl/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/domain/pipeline",
+        "main": "libs/domain/pipeline/src/index.ts",
+        "tsConfig": "libs/domain/pipeline/tsconfig.json",
+        "assets": []
+      },
+      "configurations": {
+        "production": {
+          "tsConfig": "libs/domain/pipeline/tsconfig.json"
+        }
+      }
+    },
+    "test": {
+      "executor": "@nrwl/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/libs/domain/pipeline"],
+      "options": {
+        "jestConfig": "libs/domain/pipeline/jest.config.ts",
+        "passWithNoTests": true
+      }
+    },
+    "lint": {
+      "executor": "@nrwl/linter:eslint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["libs/domain/pipeline/**/*.ts"]
+      }
+    }
+  }
+}
