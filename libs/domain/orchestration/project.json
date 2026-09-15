@@ -1,0 +1,33 @@
+{
+  "name": "domain-orchestration",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/domain/orchestration/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@nrwl/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/domain/orchestration",
+        "main": "libs/domain/orchestration/src/index.ts",
+        "tsConfig": "libs/domain/orchestration/tsconfig.json",
+        "buildableProjectDepsInPackageJsonType": "buildable"
+      }
+    },
+    "lint": {
+      "executor": "@nrwl/linter:eslint",
+      "options": {
+        "lintFilePatterns": ["libs/domain/orchestration/**/*.ts"]
+      }
+    },
+    "test": {
+      "executor": "@nrwl/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/libs/domain/orchestration"],
+      "options": {
+        "jestConfig": "libs/domain/orchestration/jest.config.ts",
+        "passWithNoTests": true
+      }
+    }
+  },
+  "tags": ["domain", "orchestration"]
+}
