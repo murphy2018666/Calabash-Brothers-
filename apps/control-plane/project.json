@@ -1,0 +1,38 @@
+{
+  "name": "control-plane",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/control-plane/src",
+  "projectType": "application",
+  "tags": ["type:app"],
+  "targets": {
+    "build": {
+      "executor": "@nrwl/node:webpack",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "main": "apps/control-plane/src/main.ts",
+        "outputPath": "dist/apps/control-plane",
+        "tsConfig": "apps/control-plane/tsconfig.app.json"
+      }
+    },
+    "serve": {
+      "executor": "@nrwl/node:execute",
+      "options": {
+        "buildTarget": "control-plane:build"
+      }
+    },
+    "test": {
+      "executor": "@nrwl/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/control-plane"],
+      "options": {
+        "jestConfig": "apps/control-plane/jest.config.ts",
+        "passWithNoTests": true
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "options": {
+        "lintFilePatterns": ["apps/control-plane/**/*.ts"]
+      }
+    }
+  }
+}
